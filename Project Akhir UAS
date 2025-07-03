@@ -199,3 +199,81 @@ server <- function(input, output, session) {
     
     return(df)
   })
+# --- Proses Analisis Utama ---
+  analysis_results <- eventReactive(input$run_analysis, {
+    req(transformed_data(), input$treatment_var, input$response_var, input$alpha)
+    df <- transformed_data()
+    req(df)
+    
+    df[[input$treatment_var]] <- as.factor(df[[input$treatment_var]])
+    model <- tryCatch({
+      if (input$design_type == "RAL") {
+        formula_text <- paste0("`", input$response_var, "` ~ `", input$treatment_var, "`")
+      } else {
+        req(input$block_var)
+        df[[input$block_var]] <- as.factor(df[[input$block_var]])
+        formula_text <- paste0("`", input$response_var, "` ~ `", input$block_var, "` + `", input$treatment_var, "`")
+      }
+      aov(as.formula(formula_text), data = df)
+    }, error = function(e) {
+      showNotification(paste("Error saat membuat model ANOVA:", e$message), type = "error", duration = 10)
+      return(NULL) 
+    })
+    
+    if (is.null(model)) return(list(error = TRUE, error_msg = "Gagal total membuat model ANOVA. Periksa kembali struktur data dan pemilihan variabel Anda."))
+    
+    summary_model <- try(summary(model), silent = TRUE)
+    tukey_test <- try(TukeyHSD(model, which = input$treatment_var, conf.level = 1 - input$alpha), silent = TRUE)
+    shapiro_res <- try(shapiro.test(residuals(model)), silent = TRUE)
+    durbin_watson_res <- try(durbinWatsonTest(model), silent = TRUE)
+    levene_res <- try(leveneTest(residuals(model) ~ df[[input$treatment_var]]), silent = TRUE)
+    
+    p_value_treatment <- NULL; p_value_block <- NULL
+    if (!inherits(summary_model, "try-error")) {
+      summary_df <- summary_model[[1]]
+      if (input$design_type == "RAK" && nrow(summary_df) >= 2) {
+        p_value_block <- summary_df$`Pr(>F)`[1]; p_value_treatment <- summary_df$`Pr(>F)`[2]
+      } else if (input$design_type == "RAL" && nrow(summary_df) >= 1) {
+        p_value_treatment <- summary_df$`Pr(>F)`[1]
+      }
+    }
+    
+    cld_letters <- NULL
+    if (!is.null(p_value_treatment) && p_value_treatment < input$alpha) {
+      cld_letters <- try({
+        treatment_name <- input$treatment_var
+        mcp_call <- eval(parse(text = sprintf("mcp(%s = 'Tukey')", treatment_name)))
+        tukey_glht <- multcomp::glht(model, linfct = mcp_call)
+        tukey_cld <- multcomp::cld(tukey_glht, level = input$alpha)
+        cld_letters_df <- as.data.frame(tukey_cld$mcletters$Letters)
+        names(cld_letters_df) <- "cld"
+        cld_letters_df %>% rownames_to_column(var = treatment_name)
+      }, silent = TRUE)
+      if (inherits(cld_letters, "try-error")) cld_letters <- NULL
+    }
+    
+    cv_value <- try({(sqrt(anova(model)["Residuals", "Mean Sq"]) / mean(data_input()[[input$response_var]], na.rm = TRUE)) * 100}, silent = TRUE)
+    
+    list(error = FALSE, model = model, model_summary = summary_model, tukey_summary = tukey_test, shapiro_test = shapiro_res,
+         levene_test = levene_res, durbin_watson_test = durbin_watson_res, p_value_treatment = p_value_treatment, 
+         p_value_block = p_value_block, cv = cv_value, cld_results = cld_letters)
+  })
+  
+  # --- Render UI Utama di Server ---
+  output$main_output_ui <- renderUI({
+    # Tampilkan pesan awal jika belum ada file
+    if(is.null(input$file_input)) {
+      return(div(style="text-align:center; padding-top: 50px;",
+                 h4("Silakan unggah file data Anda untuk memulai analisis.")))
+    }
+    
+    # Tampilkan tab setelah file diunggah
+    tabsetPanel(
+      id = "main_tabs",
+      tabPanel("Data Anda", icon = icon("table"), withSpinner(DTOutput("data_table"))),
+      tabPanel("Boxplot Interaktif", icon = icon("chart-pie"), withSpinner(plotlyOutput("boxplot", height = "500px"))),
+      tabPanel("Diagnostik & Uji Asumsi", icon = icon("stethoscope"), br(), uiOutput("assumption_ui")),
+      tabPanel("Hasil ANOVA", icon = icon("calculator"), br(), uiOutput("anova_results_ui")),
+      tabPanel("Uji Lanjut", icon = icon("vials"), br(), uiOutput("uji_lanjut_ui_output"))
+    )
+  })
