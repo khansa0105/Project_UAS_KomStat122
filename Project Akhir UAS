@@ -372,3 +372,61 @@ server <- function(input, output, session) {
     }
     tagList(tags$h6("Pengaruh Perlakuan", style="font-weight:bold;"), interp_treat, if(!is.null(interp_block)) {tagList(hr(), tags$h6("Pengaruh Kelompok", style="font-weight:bold;"), interp_block)})
   })
+# Visualisasi & Uji Lanjut
+
+output$uji_lanjut_ui_output <- renderUI({ 
+  req(analysis_results()); res <- analysis_results()
+  if(res$error) return(card(card_body(p("Analisis utama gagal, uji lanjut tidak dapat dilakukan.", style="color:red;"))))
+  if(is.null(res$p_value_treatment)) return(card(card_body(p("Uji lanjut tidak dapat dilakukan karena hasil ANOVA tidak tersedia."))))
+  if (res$p_value_treatment >= input$alpha) { return(card(card_body(p("Karena uji ANOVA tidak signifikan, Uji Lanjut tidak relevan untuk dilakukan.")))) }
+  if(inherits(res$tukey_summary, "try-error")) { return(card(card_header(h5(icon("exclamation-triangle"), "Error")), card_body(p("Uji Lanjut Tukey HSD gagal dijalankan. Ini bisa terjadi pada desain yang tidak seimbang.", style="color:red;")))) }
+  tagList(card(card_header(h5("Hasil Uji Lanjut Tukey HSD")), card_body(verbatimTextOutput("tukey_result"))),
+          card(card_header(h5("Interpretasi Uji Lanjut")), card_body(htmlOutput("tukey_interpretation_output"))))
+})
+
+output$tukey_result <- renderPrint({ req(res <- analysis_results()); if(inherits(res$tukey_summary, "try-error")) return(); print(res$tukey_summary) })
+
+output$tukey_interpretation_output <- renderUI({
+  req(analysis_results()); res <- analysis_results()
+  if(res$error || inherits(res$tukey_summary, "try-error")) return(NULL)
+  tukey_df <- as.data.frame(res$tukey_summary[[input$treatment_var]]) %>% as_tibble(rownames = "contrast")
+  alpha <- input$alpha
+  significant_pairs <- tukey_df %>% filter(p adj < alpha)
+  if (nrow(significant_pairs) > 0) {
+    apply(significant_pairs, 1, function(row) {
+      contrast <- row["contrast"]; groups <- stringr::str_split(contrast, "-")[[1]]
+      p_adj_val <- as.numeric(row["p adj"]); diff_val <- as.numeric(row["diff"])
+      p_adj_formatted <- if(p_adj_val < 0.001) "<0.001" else format(round(p_adj_val, 4), nsmall = 4)
+      direction_text <- if(diff_val > 0) paste0("lebih tinggi daripada <b>", groups[2], "</b>") else paste0("lebih rendah daripada <b>", groups[2], "</b>")
+      tagList(tags$p(HTML(sprintf("<b>Perbandingan %s:</b> Ditemukan perbedaan yang signifikan (p = %s). Rata-rata respons untuk <b>%s</b> secara signifikan %s.", contrast, p_adj_formatted, groups[1], direction_text))), hr())
+    })
+  } else { HTML("<p>Meskipun uji ANOVA signifikan, Uji Lanjut Tukey tidak menemukan pasangan perlakuan spesifik yang berbeda nyata pada taraf α yang dipilih.</p>") }
+})
+
+render_assumption_test <- function(test_name) {
+  list(raw = renderPrint({req(analysis_results()); res <- analysis_results()[[test_name]]; if(inherits(res, "try-error")) return(cat("Uji tidak dapat dilakukan.")); print(res)}),
+       interp = renderUI({
+         req(analysis_results()); test <- analysis_results()[[test_name]]
+         if(inherits(test, "try-error")) return(tags$p("Gagal menjalankan uji.", style="color:red;"))
+         p_val <- if(test_name == "levene_test") test$Pr(>F)[1] else test$p; alpha <- input$alpha
+         p_val_formatted <- if(p_val < 0.001) "<0.001" else format(round(p_val, 4), nsmall = 4)
+         if(p_val > alpha) {
+           line1 <- sprintf("<b>Keputusan:</b> Gagal Tolak H₀ (p-value %s > %s).", p_val_formatted, alpha)
+           line2 <- switch(test_name, shapiro_test = "<b>Kesimpulan:</b> Data sisaan (residuals) berdistribusi normal.", levene_test = "<b>Kesimpulan:</b> Ragam sisaan bersifat homogen.", durbin_watson_test = "<b>Kesimpulan:</b> Tidak ada autokorelasi antar sisaan (independen).")
+           style_color <- "color: #198754;"; saran <- NULL
+         } else {
+           line1 <- sprintf("<b>Keputusan:</b> Tolak H₀ (p-value %s ≤ %s).", p_val_formatted, alpha)
+           line2 <- switch(test_name, shapiro_test = "<b>Kesimpulan:</b> Data sisaan tidak berdistribusi normal.", levene_test = "<b>Kesimpulan:</b> Ragam sisaan tidak homogen (heteroskedastisitas).", durbin_watson_test = "<b>Kesimpulan:</b> Terdapat autokorelasi antar sisaan.")
+           style_color <- "color: #dc3545;"
+           saran <- if(test_name != "durbin_watson_test") tags$p(icon("lightbulb"), HTML("<i>Saran: Coba gunakan transformasi data pada panel kontrol dan jalankan ulang analisis.</i>")) else NULL
+         }
+         tagList(tags$p(HTML(line1)), tags$p(HTML(line2), style = style_color), saran)
+       }))
+}
+shapiro_outputs <- render_assumption_test("shapiro_test"); output$shapiro_test_raw_output <- shapiro_outputs$raw; output$shapiro_interpretation_output <- shapiro_outputs$interp
+levene_outputs <- render_assumption_test("levene_test"); output$levene_test_raw_output <- levene_outputs$raw; output$levene_interpretation_output <- levene_outputs$interp
+dw_outputs <- render_assumption_test("durbin_watson_test"); output$durbin_watson_test_raw_output <- dw_outputs$raw; output$durbin_watson_interpretation_output <- dw_outputs$interp
+}
+
+# 5. Menjalankan Aplikasi Shiny
+shinyApp(ui = ui, server = server)
