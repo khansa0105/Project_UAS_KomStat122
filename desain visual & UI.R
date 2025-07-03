@@ -1,0 +1,147 @@
+# 1. Memuat Semua Library yang Dibutuhkan
+install.packages("shinycssloaders")
+install.packages("plotly")
+library(shiny)
+library(DT)
+library(ggplot2)
+library(dplyr)
+library(bslib)
+library(thematic)
+library(shinyjs)
+library(car)
+library(scales)
+library(stringr)
+library(tibble)
+library(multcomp)
+library(plotly)          # Untuk plot interaktif
+library(shinycssloaders) # Untuk animasi loading
+
+# 2. Pengaturan Tema & Visual
+thematic_shiny()
+app_theme <- bs_theme(
+  version = 5,
+  bg = "#F4FBF6", fg = "#1A4D2E", # Background lebih lembut, teks hijau tua
+  primary = "#85CB33", # Hijau utama yang lebih cerah
+  secondary = "#A3D18C", # Hijau sekunder yang lebih muda
+  success = "#20C997",
+  base_font = font_google("Poppins", local = FALSE),
+  heading_font = font_google("Quicksand", local = FALSE),
+  "card-bg" = "#FFFFFF",
+  "card-border-color" = "#D1E7DD", # Border kartu hijau muda
+  "card-border-width" = "1px",
+  "card-box-shadow" = "0 2px 5px rgba(0, 0, 0, 0.05)",
+  "btn-primary-bg" = "#A3D18C",
+  "btn-primary-border" = "#A3D18C",
+  "btn-primary-hover-bg" = "#85CB33",
+  "btn-primary-hover-border" = "#85CB33",
+  "link-color" = "#1A4D2E"
+)
+
+# 3. User Interface (UI) - Tampilan Aplikasi
+ui <- navbarPage(
+  title = div(icon("chart-bar"), "Analisis Rancangan Percobaan"),
+  theme = app_theme,
+  collapsible = TRUE,
+  useShinyjs(),
+  
+  # Halaman 1: Dashboard / Selamat Datang
+  tabPanel("Dashboard", icon = icon("home"),
+           fluidPage(
+             br(),
+             div(style = "text-align: center; padding: 20px;",
+                 h1("Selamat Datang di Aplikasi Analisis Statistik"),
+                 p(class = "lead", "Alat bantu interaktif untuk menganalisis Rancangan Acak Lengkap (RAL) dan Rancangan Acak Kelompok (RAK)."),
+                 br(),
+                 p("Mulai dengan mengunggah data Anda di panel kontrol pada tab 'Analisis'."),
+                 hr()
+             ),
+             fluidRow(
+               column(6,
+                      card(
+                        card_header(tags$h5(icon("lightbulb"), " Fitur Utama")),
+                        card_body(
+                          tags$ul(
+                            tags$li("Analisis ANOVA untuk RAL & RAK."),
+                            tags$li("Uji Asumsi Klasik (Normalitas, Homogenitas, Independensi)."),
+                            tags$li("Plot Boxplot Interaktif dengan notasi Uji Lanjut Tukey."),
+                            tags$li("Transformasi Data (Log & Akar Kuadrat)."),
+                            tags$li("Deteksi Jenis Rancangan Otomatis.")
+                          )
+                        )
+                      )
+               ),
+               column(6,
+                      card(
+                        card_header(tags$h5(icon("list-ol"), " Langkah Cepat")),
+                        card_body(
+                          tags$ol(
+                            tags$li("Buka tab 'Analisis' di navigasi atas."),
+                            tags$li("Unggah file .csv Anda di 'Panel Kontrol' sebelah kiri."),
+                            tags$li("Atur konfigurasi (jenis rancangan, variabel, dll)."),
+                            tags$li("Klik 'Jalankan Analisis' dan lihat hasilnya!")
+                          )
+                        )
+                      )
+               )
+             )
+           )
+  ),
+  
+  # Halaman 2: Analisis Utama
+  tabPanel("Analisis", icon = icon("table-cells"),
+           sidebarLayout(
+             sidebarPanel(
+               width = 4,
+               h4(icon("sliders-h"), " Panel Kontrol"), hr(),
+               fileInput("file_input", "Unggah File CSV Anda", accept = c("text/csv", ".csv")),
+               radioButtons("design_type", "Pilih Jenis Rancangan:",
+                            choices = c("Rancangan Acak Lengkap (RAL)" = "RAL", "Rancangan Acak Kelompok (RAK)" = "RAK")),
+               uiOutput("treatment_var_ui"),
+               conditionalPanel("input.design_type == 'RAK'", uiOutput("block_var_ui")),
+               uiOutput("response_var_ui"),
+               
+               selectInput("transformation_type", "Transformasi Data Respons (jika perlu):",
+                           choices = c("Tidak Ada (Asli)" = "none",
+                                       "Logaritma Natural (Log)" = "log",
+                                       "Akar Kuadrat (Sqrt)" = "sqrt")),
+               
+               sliderInput("alpha", "Pilih Taraf Nyata (α):", min = 0.01, max = 0.10, value = 0.05, step = 0.01),
+               div(actionButton("run_analysis", "Jalankan Analisis", icon = icon("play-circle"), class = "btn-success btn-lg w-100"), align = "center")
+             ),
+             mainPanel(
+               width = 8,
+               # Tampilan hasil akan di-render di sini
+               uiOutput("main_output_ui")
+             )
+           )
+  ),
+  
+  # Halaman 3: Panduan
+  tabPanel("Panduan", icon = icon("book-open"),
+           fluidPage(
+             br(),
+             h3("Panduan Penggunaan dan Format Data"),
+             hr(),
+             card(card_header(tags$h5(icon("file-csv"), " Contoh Format Data RAL")),
+                  card_body(
+                    tags$p("Data untuk RAL minimal memiliki 2 kolom. Satu kolom untuk perlakuan (kategorikal) dan satu kolom untuk respons (numerik)."),
+                    tags$table(class = "table table-bordered table-sm", style = "width: auto;",
+                               tags$thead(tags$tr(tags$th("Perlakuan"), tags$th("Respons"))),
+                               tags$tbody(
+                                 tags$tr(tags$td("Pupuk A"), tags$td("25.5")), tags$tr(tags$td("Pupuk A"), tags$td("26.7")),
+                                 tags$tr(tags$td("Pupuk A"), tags$td("24.9")), tags$tr(tags$td("Pupuk B"), tags$td("28.1")),
+                                 tags$tr(tags$td("Pupuk B"), tags$td("29.0"))
+                               )))),
+             card(card_header(tags$h5(icon("file-csv"), " Contoh Format Data RAK")),
+                  card_body(
+                    tags$p("Data untuk RAK minimal memiliki 3 kolom. Kolom untuk perlakuan, kelompok (kategorikal), dan respons (numerik)."),
+                    tags$table(class = "table table-bordered table-sm", style = "width: auto;",
+                               tags$thead(tags$tr(tags$th("Perlakuan"), tags$th("Kelompok"), tags$th("Respons"))),
+                               tags$tbody(
+                                 tags$tr(tags$td("Varietas A"), tags$td("Blok 1"), tags$td("5.2")), tags$tr(tags$td("Varietas B"), tags$td("Blok 1"), tags$td("5.9")),
+                                 tags$tr(tags$td("Varietas A"), tags$td("Blok 2"), tags$td("5.4")), tags$tr(tags$td("Varietas B"), tags$td("Blok 2"), tags$td("6.1")),
+                                 tags$tr(tags$td("Varietas A"), tags$td("Blok 3"), tags$td("5.0"))
+                               ))))
+           )
+  )
+)
