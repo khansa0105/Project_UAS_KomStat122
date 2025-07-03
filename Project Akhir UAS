@@ -277,3 +277,98 @@ server <- function(input, output, session) {
       tabPanel("Uji Lanjut", icon = icon("vials"), br(), uiOutput("uji_lanjut_ui_output"))
     )
   })
+# --- Render bagian-bagian UI yang dinamis ---
+  output$assumption_ui <- renderUI({
+    req(analysis_results())
+    res <- analysis_results()
+    if(res$error) return(card(card_body(p(res$error_msg, style="color:red;"))))
+    
+    tagList(
+      uiOutput("transformation_warning_ui"),
+      card(card_header(h5(icon("chart-line"), "Asumsi Normalitas Galat")),
+           card_body(plotOutput("qq_plot", height = "300px"), hr(), h6("Uji Shapiro-Wilk"), verbatimTextOutput("shapiro_test_raw_output"), hr(), uiOutput("shapiro_interpretation_output"))),
+      card(card_header(h5(icon("chart-scatter"), "Asumsi Homogenitas Ragam")),
+           card_body(plotOutput("residual_plot", height = "300px"), hr(), h6("Uji Levene"), verbatimTextOutput("levene_test_raw_output"), hr(), uiOutput("levene_interpretation_output"))),
+      card(card_header(h5(icon("wave-square"), "Asumsi Independensi Galat")),
+           card_body(h6("Uji Durbin-Watson"), verbatimTextOutput("durbin_watson_test_raw_output"), hr(), uiOutput("durbin_watson_interpretation_output")))
+    )
+  })
+  
+  output$anova_results_ui <- renderUI({
+    req(analysis_results())
+    res <- analysis_results()
+    if(res$error) return(card(card_body(p(res$error_msg, style="color:red;"))))
+    
+    tagList(
+      card(card_header(h5(icon("lightbulb"), "Hipotesis Uji")), card_body(htmlOutput("hypotheses_output"))),
+      card(card_header(h5(icon("table-list"), "Tabel Analisis Varians (ANOVA)")), card_body(verbatimTextOutput("anova_result"))),
+      card(card_header(h5(icon("percentage"), "Presisi Percobaan")), card_body(uiOutput("cv_output"))),
+      card(card_header(h5(icon("comment-dots"), "Interpretasi Hasil ANOVA")), card_body(htmlOutput("anova_interpretation_output")))
+    )
+  })
+  
+  output$transformation_warning_ui <- renderUI({
+    req(input$transformation_type)
+    if (input$transformation_type != "none") {
+      transform_name <- ifelse(input$transformation_type == "log", "Logaritma (Log)", "Akar Kuadrat (Sqrt)")
+      card(style = "background-color: #fff3cd; border-color: #ffeeba;", card_body(p(class = "text-dark", icon("exclamation-triangle"), HTML(sprintf("<b>Peringatan:</b> Anda melihat hasil pada data yang ditransformasi menggunakan <b>%s</b>.", transform_name)))))
+    }
+  }) 
+  
+  # --- Render semua Output ---
+  output$data_table <- renderDT({ datatable(data_input(), options = list(pageLength = 10, scrollX = TRUE), class = 'cell-border stripe', filter = 'top') })
+  
+  output$boxplot <- renderPlotly({
+    req(analysis_results(), transformed_data())
+    res <- analysis_results(); df <- transformed_data()
+    if(res$error) return(NULL)
+    
+    treatment_var <- sym(input$treatment_var); response_var <- sym(input$response_var)
+    
+    p <- ggplot(df, aes(x = !!treatment_var, y = !!response_var, fill = !!treatment_var,
+                        text = paste("Perlakuan:", !!treatment_var, "<br>Respons:", round(!!response_var, 2)))) +
+      geom_boxplot(alpha = 0.8, show.legend = FALSE, width = 0.7) +
+      geom_jitter(width = 0.1, alpha = 0.6) +
+      labs(title = "Distribusi Respons Berdasarkan Perlakuan", x = "Perlakuan", y = paste("Respons", if(input$transformation_type != "none") paste0("(", input$transformation_type, ")") else "")) +
+      theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 16), axis.title = element_text(size = 12), axis.text = element_text(size = 10))
+    
+    if (!is.null(res$cld_results) && !inherits(res$cld_results, "try-error")) {
+      stat_data <- df %>% group_by(!!treatment_var) %>% summarise(max_y = max(!!response_var, na.rm = TRUE), .groups = 'drop')
+      cld_data_with_pos <- res$cld_results %>% left_join(stat_data, by = input$treatment_var)
+      p <- p + geom_text(data = cld_data_with_pos, aes(x = !!treatment_var, y = max_y + (0.05 * max(stat_data$max_y, na.rm=TRUE)), label = str_trim(cld)),
+                         vjust = -0.5, size = 5, fontface = "bold", inherit.aes = FALSE)
+    }
+    ggplotly(p, tooltip = "text")
+  })
+  
+  output$qq_plot <- renderPlot({ req(analysis_results()); res <- analysis_results(); if(res$error) return(NULL); plot(res$model, which = 2, pch = 19, col = "#007bff", main = "Normal Q-Q Plot dari Galat") })
+  output$residual_plot <- renderPlot({ req(analysis_results()); res <- analysis_results(); if(res$error) return(NULL); plot(res$model, which = 1, pch = 19, col = "#007bff", main = "Plot Sisaan vs. Nilai Prediksi") })
+  
+  output$hypotheses_output <- renderUI({ 
+    req(analysis_results()); h_perlakuan <- div(tags$b("1. Pengaruh Perlakuan"), div(style="margin-left: 15px; margin-top: 5px;", HTML("<b>H&#8320;:</b> Rata-rata semua perlakuan sama.")), div(style="margin-left: 15px;", HTML("<b>H&#8321;:</b> Minimal ada satu rata-rata perlakuan yang berbeda."))); if (input$design_type == "RAK") { h_kelompok <- div(style="margin-top: 10px;", tags$b("2. Pengaruh Kelompok/Blok"), div(style="margin-left: 15px; margin-top: 5px;", HTML("<b>H&#8320;:</b> Tidak ada pengaruh dari kelompok.")), div(style="margin-left: 15px;", HTML("<b>H&#8321;:</b> Ada pengaruh dari kelompok."))); tagList(h_perlakuan, h_kelompok)} else { h_perlakuan }
+  })
+  
+  output$anova_result <- renderPrint({ req(analysis_results()); res <- analysis_results(); if(inherits(res$model_summary, "try-error")) return(cat("Gagal menampilkan tabel ANOVA.")); print(res$model_summary) })
+  
+  output$cv_output <- renderUI({ 
+    req(analysis_results()); res <- analysis_results()
+    if(inherits(res$cv, "try-error")) return(tags$p("Gagal menghitung KK/CV.", style="color:red;"))
+    cv <- res$cv; interp_cv <- if (cv < 10) {"Sangat Baik"} else if (cv < 20) {"Baik"} else if (cv < 30) {"Cukup"} else {"Rendah"};
+    HTML(sprintf("<b>Koefisien Keragaman (KK): %.2f%%</b><br><small>Presisi percobaan: %s</small>", cv, interp_cv))
+  })
+  
+  output$anova_interpretation_output <- renderUI({ 
+    req(analysis_results()); res <- analysis_results()
+    if(is.null(res$p_value_treatment)) return(tags$p("Gagal menghasilkan interpretasi.", style="color:red;"))
+    alpha <- input$alpha; p_treat <- res$p_value_treatment
+    p_treat_formatted <- if(p_treat < 0.001) "<0.001" else format(round(p_treat, 4), nsmall = 4)
+    if (p_treat < alpha) { interp_treat <- tagList(tags$p(HTML(paste0("<b>Keputusan:</b> Tolak H₀ (p-value ", p_treat_formatted, " < ", alpha, ")."))), tags$p(HTML("<b>Kesimpulan:</b> Terdapat bukti statistik yang cukup untuk menyatakan bahwa paling tidak ada satu perlakuan yang memberikan pengaruh berbeda nyata terhadap respons."))) } 
+    else { interp_treat <- tagList(tags$p(HTML(paste0("<b>Keputusan:</b> Gagal Tolak H₀ (p-value ", p_treat_formatted, " ≥ ", alpha, ")."))), tags$p(HTML("<b>Kesimpulan:</b> Tidak terdapat bukti statistik yang cukup untuk menyatakan adanya perbedaan pengaruh yang nyata antar perlakuan."))) }
+    interp_block <- NULL
+    if (input$design_type == "RAK" && !is.null(res$p_value_block)) {
+      p_block <- res$p_value_block; p_block_formatted <- if(p_block < 0.001) "<0.001" else format(round(p_block, 4), nsmall = 4)
+      if (p_block < alpha) { interp_block <- tagList(tags$p(HTML(paste0("<b>Keputusan Blok:</b> Tolak H₀ (p-value ", p_block_formatted, " < ", alpha, ")."))), tags$p(HTML("<b>Kesimpulan Blok:</b> Pengelompokan (blocking) efektif dalam mengurangi keragaman galat."))) } 
+      else { interp_block <- tagList(tags$p(HTML(paste0("<b>Keputusan Blok:</b> Gagal Tolak H₀ (p-value ", p_block_formatted, " ≥ ", alpha, ")."))), tags$p(HTML("<b>Kesimpulan Blok:</b> Pengelompokan (blocking) tidak efektif."))) }
+    }
+    tagList(tags$h6("Pengaruh Perlakuan", style="font-weight:bold;"), interp_treat, if(!is.null(interp_block)) {tagList(hr(), tags$h6("Pengaruh Kelompok", style="font-weight:bold;"), interp_block)})
+  })
