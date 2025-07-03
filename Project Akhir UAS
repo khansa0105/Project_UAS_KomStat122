@@ -1,0 +1,16 @@
+install.packages("shinycssloaders")
+install.packages("plotly")
+library(shiny)
+library(DT)
+library(ggplot2)
+library(dplyr)
+library(bslib)
+library(thematic)
+library(shinyjs)
+library(car)
+library(scales)
+library(stringr)
+library(tibble)
+library(multcomp)
+library(plotly)          # Untuk plot interaktif
+library(shinycssloaders) # Untuk animasi loading
